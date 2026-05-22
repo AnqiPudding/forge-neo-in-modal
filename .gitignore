@@ -1,0 +1,7 @@
+.env.local.bat
+forge-neo-source/
+__pycache__/
+*.pyc
+.modal/
+outputs/
+inputs/
