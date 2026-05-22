@@ -32,17 +32,25 @@ FILE_MANAGER_PREFIX = "/" + os.environ.get("FILE_MANAGER_PREFIX", "/files").stri
 FILEBROWSER_VERSION = os.environ.get("FILEBROWSER_VERSION", "v2.63.5")
 FORGE_NEO_REPO = os.environ.get("FORGE_NEO_REPO", "https://github.com/Haoming02/sd-webui-forge-classic.git")
 FORGE_NEO_REF = os.environ.get("FORGE_NEO_REF", "neo")
-SAGEATTENTION_REF = os.environ.get("SAGEATTENTION_REF", "v2.2.0")
+FORGE_NEO_COMMIT = os.environ.get("FORGE_NEO_COMMIT", "61d327da65b0483cafb74d641f030737db2d6bf1")
+PYTHON_STANDALONE_URL = os.environ.get(
+    "PYTHON_STANDALONE_URL",
+    "https://github.com/astral-sh/python-build-standalone/releases/download/20251209/"
+    "cpython-3.13.11%2B20251209-x86_64-unknown-linux-gnu-install_only.tar.gz",
+)
+SAGE_PACKAGE = os.environ.get(
+    "SAGE_PACKAGE",
+    "--no-build-isolation git+https://github.com/thu-ml/SageAttention.git@v2.2.0",
+)
 FORCE_BUILD = os.environ.get("MODAL_FORCE_BUILD", "").lower() in {"1", "true", "yes", "on"}
-SKIP_SAGEATTENTION = os.environ.get("SKIP_SAGEATTENTION", "").lower() in {"1", "true", "yes", "on"}
 
 if DATA_MOUNT_PATH == "/":
     raise ValueError("MODAL_DATA_MOUNT_PATH cannot be '/'.")
 
 PYTORCH_INDEX_URL = os.environ.get("PYTORCH_INDEX_URL", "https://download.pytorch.org/whl/cu130")
 PYTORCH_PACKAGES = [
-    os.environ.get("TORCH_PACKAGE", "torch==2.11.0+cu130"),
-    os.environ.get("TORCHVISION_PACKAGE", "torchvision==0.26.0+cu130"),
+    os.environ.get("TORCH_PACKAGE", "torch==2.10.0+cu130"),
+    os.environ.get("TORCHVISION_PACKAGE", "torchvision==0.25.0+cu130"),
 ]
 
 EXTENSIONS = {
@@ -79,7 +87,14 @@ extension_clone_commands = " && ".join(
 base_image = (
     modal.Image.from_registry(
         os.environ.get("CUDA_BASE_IMAGE", "nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04"),
-        add_python="3.13",
+        setup_dockerfile_commands=[
+            "RUN apt-get update && "
+            "apt-get install -y --no-install-recommends ca-certificates curl gzip tar && "
+            "rm -rf /var/lib/apt/lists/*",
+            f"RUN curl -fsSL {shlex.quote(PYTHON_STANDALONE_URL)} "
+            "| tar -xz -C /usr/local --strip-components=1",
+            "RUN python --version && python -m pip --version && (ldconfig || true)",
+        ],
         force_build=FORCE_BUILD,
     )
     .apt_install(
@@ -113,7 +128,10 @@ base_image = (
             "CC": "/usr/bin/gcc",
             "CXX": "/usr/bin/g++",
             "CUDAHOSTCXX": "/usr/bin/g++",
+            "EXT_PARALLEL": "1",
             "GRADIO_ANALYTICS_ENABLED": "False",
+            "MAX_JOBS": "1",
+            "SAGE_PACKAGE": SAGE_PACKAGE,
         }
     )
     .pip_install(
@@ -154,8 +172,17 @@ base_image = (
         force_build=FORCE_BUILD,
     )
     .run_commands(
-        "git clone --depth=1 --branch \"$FORGE_NEO_REF\" \"$FORGE_NEO_REPO\" /opt/forge-neo",
-        env={"FORGE_NEO_REPO": FORGE_NEO_REPO, "FORGE_NEO_REF": FORGE_NEO_REF},
+        "git clone --depth=1 --branch \"$FORGE_NEO_REF\" \"$FORGE_NEO_REPO\" /opt/forge-neo && "
+        "cd /opt/forge-neo && "
+        "if [ -n \"$FORGE_NEO_COMMIT\" ]; then "
+        "  git fetch --depth=1 origin \"$FORGE_NEO_COMMIT\" && git checkout --detach \"$FORGE_NEO_COMMIT\"; "
+        "fi && "
+        "git rev-parse --short HEAD",
+        env={
+            "FORGE_NEO_REPO": FORGE_NEO_REPO,
+            "FORGE_NEO_REF": FORGE_NEO_REF,
+            "FORGE_NEO_COMMIT": FORGE_NEO_COMMIT,
+        },
         force_build=FORCE_BUILD,
     )
     .run_commands(
@@ -174,39 +201,10 @@ base_image = (
     )
     .run_commands(
         "cd /opt/forge-neo && "
-        "python -m pip install --upgrade pip setuptools wheel && "
+        "python -m pip install --upgrade \"pip<27\" \"setuptools>=75,<82\" \"wheel>=0.45,<1\" && "
         "python launch.py --skip-python-version-check --skip-torch-cuda-test --skip-version-check "
-        "--sage --exit",
-        gpu=GPU,
-        force_build=FORCE_BUILD,
-    )
-    .run_commands(
-        "if [ \"$SKIP_SAGEATTENTION\" = \"1\" ]; then "
-        "  echo 'Skipping explicit SageAttention source build by request.'; "
-        "else "
-        "  python -c \"import sageattention; print('SageAttention already importable:', getattr(sageattention, '__version__', 'unknown'))\" "
-        "  || ("
-        "    git clone --depth=1 --branch \"$SAGEATTENTION_REF\" https://github.com/thu-ml/SageAttention.git /tmp/SageAttention "
-        "      || git clone --depth=1 https://github.com/thu-ml/SageAttention.git /tmp/SageAttention; "
-        "    cd /tmp/SageAttention; "
-        "    export CC=${CC:-/usr/bin/gcc}; "
-        "    export CXX=${CXX:-/usr/bin/g++}; "
-        "    export CUDAHOSTCXX=${CUDAHOSTCXX:-/usr/bin/g++}; "
-        "    export EXT_PARALLEL=${SAGEATTENTION_EXT_PARALLEL:-${EXT_PARALLEL:-1}}; "
-        "    export MAX_JOBS=${SAGEATTENTION_MAX_JOBS:-${MAX_JOBS:-1}}; "
-        "    unset NVCC_APPEND_FLAGS; "
-        "    python -m pip install --no-build-isolation --no-warn-conflicts ."
-        "  ); "
-        "  python -c \"import sageattention; print('SageAttention import OK:', getattr(sageattention, '__version__', 'unknown'))\"; "
-        "fi",
-        env={
-            "SAGEATTENTION_REF": SAGEATTENTION_REF,
-            "SKIP_SAGEATTENTION": "1" if SKIP_SAGEATTENTION else "0",
-            "TORCH_CUDA_ARCH_LIST": "8.9",
-            "CC": "/usr/bin/gcc",
-            "CXX": "/usr/bin/g++",
-            "CUDAHOSTCXX": "/usr/bin/g++",
-        },
+        "--sage --exit && "
+        "python -c \"import sageattention; print('Forge-managed SageAttention import OK:', getattr(sageattention, '__version__', 'unknown'))\"",
         gpu=GPU,
         force_build=FORCE_BUILD,
     )

@@ -72,15 +72,31 @@ ensure_static_extensions() {
 }
 
 write_default_config() {
-  WEBUI_DATA_DIR="${WEBUI_DATA_DIR}" MODEL_DIR="${MODEL_DIR}" python - <<'PY'
+  WEBUI_DATA_DIR="${WEBUI_DATA_DIR}" MODEL_DIR="${MODEL_DIR}" FORGE_DIR="${FORGE_DIR}" python - <<'PY'
 import json
 import os
+import re
+import time
 from pathlib import Path
 
 webui = Path(os.environ["WEBUI_DATA_DIR"])
 model_dir = Path(os.environ["MODEL_DIR"])
+forge_dir = Path(os.environ["FORGE_DIR"])
 config_path = webui / "config.json"
+ui_config_path = webui / "ui-config.json"
 config_path.parent.mkdir(parents=True, exist_ok=True)
+
+def forge_version_uid() -> str:
+    launch_utils = forge_dir / "modules" / "launch_utils.py"
+    try:
+        text = launch_utils.read_text(encoding="utf-8")
+    except OSError:
+        return "PY313"
+    match = re.search(r'VERSION_UID:\s*Final\[str\]\s*=\s*["\']([^"\']+)["\']', text)
+    return match.group(1) if match else "PY313"
+
+
+expected_version_uid = forge_version_uid()
 
 try:
     config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -94,8 +110,19 @@ except Exception:
     print(f"Moved unreadable config to {backup}")
     config = {}
 
+if config and config.get("VERSION_UID") != expected_version_uid:
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    backup = config_path.with_name(f"config.json.before-{expected_version_uid}-{stamp}")
+    config_path.replace(backup)
+    print(f"Moved stale Forge config to {backup}")
+    if ui_config_path.exists():
+        ui_backup = ui_config_path.with_name(f"ui-config.json.before-{expected_version_uid}-{stamp}")
+        ui_config_path.replace(ui_backup)
+        print(f"Moved stale Forge UI config to {ui_backup}")
+    config = {}
+
 defaults = {
-    "VERSION_UID": "PY313",
+    "VERSION_UID": expected_version_uid,
     "outdir_txt2img_samples": str(webui / "output" / "txt2img-images"),
     "outdir_img2img_samples": str(webui / "output" / "img2img-images"),
     "outdir_extras_samples": str(webui / "output" / "extras-images"),

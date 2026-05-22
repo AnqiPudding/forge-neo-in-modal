@@ -7,6 +7,9 @@
 - GPU: `L40S`
 - Public endpoint label: `forge-neo`
 - File Browser: `/files/`
+- Forge Neo commit: `61d327da65b0483cafb74d641f030737db2d6bf1`
+- Python: `3.13.11`
+- PyTorch: `2.10.0+cu130`
 
 `start-server.bat` infers the Modal URL from `modal token info`, usually:
 
@@ -25,9 +28,18 @@ The Modal Volume stores:
 - `/vol/.state`
 - `/vol/.cache`
 
+If Forge Neo changes its internal config version marker, startup backs up stale
+`config.json` and `ui-config.json` before booting. This follows Forge's clean UI
+reset path without touching models, outputs, or cached downloads.
+
 Forge Neo source and the requested extensions are baked into the image. This is
 intentional: the project is static and does not run a custom-node style
 self-bake loop.
+
+SageAttention is installed through Forge's `--sage --exit` path, then verified
+with an import check. On Linux, Forge's default `sageattention==2.2.0` target is
+not available from PyPI, so `SAGE_PACKAGE` points Forge at the official
+`thu-ml/SageAttention` `v2.2.0` source tag.
 
 ## Baked Extension Set
 
@@ -63,6 +75,7 @@ tools\io\download-model.bat
 ```bat
 python -m py_compile app\modal_app.py app\scale_down.py app\wait_for_forge.py app\scripts\webui_file_proxy.py app\scripts\volume_commit_loop.py app\extensions\modal_model_downloader\scripts\modal_model_downloader.py
 modal volume create forge-neo-modal-data
+set MODAL_FORCE_BUILD=1
 modal deploy app/modal_app.py
 modal run app/modal_app.py::diagnostics
 modal run app/modal_app.py::startup_check
